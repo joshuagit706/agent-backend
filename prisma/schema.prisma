@@ -1,0 +1,426 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id                String          @id @default(cuid())
+  email             String          @unique
+  username          String          @unique
+  passwordHash      String
+  emailVerified     Boolean         @default(false)
+  isActive          Boolean         @default(true)
+  createdAt         DateTime        @default(now())
+  updatedAt         DateTime        @updatedAt
+
+  sessions          Session[]
+  githubAccounts    GitHubAccount[]
+  executionBatches  ExecutionBatch[]
+  tokenUsages       TokenUsage[]
+  auditLogs         AuditLog[]
+  settings          UserSettings?
+
+  @@index([email])
+}
+
+model Session {
+  id           String   @id @default(cuid())
+  userId       String
+  token        String   @unique
+  refreshToken String?  @unique
+  expiresAt    DateTime
+  ipAddress    String?
+  userAgent    String?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([token])
+}
+
+model GitHubAccount {
+  id               String    @id @default(cuid())
+  userId           String
+  githubUserId     String
+  githubUsername   String
+  githubEmail      String?
+  avatarUrl        String?
+  accountType      String    @default("User")
+  encryptedToken   String
+  tokenLastFour    String
+  scopes           String[]
+  isActive         Boolean   @default(true)
+  isValid          Boolean   @default(true)
+  lastValidatedAt  DateTime?
+  lastSyncedAt     DateTime?
+  repoCount        Int       @default(0)
+  openIssueCount   Int       @default(0)
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+
+  user         User               @relation(fields: [userId], references: [id], onDelete: Cascade)
+  repositories GitHubRepository[]
+  issues       AssignedIssue[]
+
+  @@unique([userId, githubUserId])
+  @@index([userId])
+}
+
+model GitHubRepository {
+  id               String   @id @default(cuid())
+  githubAccountId  String
+  githubRepoId     String
+  owner            String
+  name             String
+  fullName         String
+  description      String?
+  isPrivate        Boolean  @default(false)
+  defaultBranch    String   @default("main")
+  language         String?
+  topics           String[]
+  htmlUrl          String
+  cloneUrl         String
+  sshUrl           String
+  openIssuesCount  Int      @default(0)
+  starCount        Int      @default(0)
+  forkCount        Int      @default(0)
+  lastPushedAt     DateTime?
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  githubAccount     GitHubAccount   @relation(fields: [githubAccountId], references: [id], onDelete: Cascade)
+  assignedIssues    AssignedIssue[]
+  consolidatedBranches ConsolidatedBranch[]
+  pullRequests      PullRequest[]
+
+  @@unique([githubAccountId, githubRepoId])
+  @@index([githubAccountId])
+  @@index([fullName])
+}
+
+model AssignedIssue {
+  id                  String    @id @default(cuid())
+  githubAccountId     String
+  repositoryId        String
+  githubIssueId       String
+  issueNumber         Int
+  title               String
+  body                String?   @db.Text
+  state               String    @default("open")
+  labels              Json      @default("[]")
+  assignees           Json      @default("[]")
+  comments            Json      @default("[]")
+  htmlUrl             String
+  priority            String    @default("medium")
+  aiStatus            String    @default("pending")
+  prStatus            String?
+  lastGithubSync      DateTime?
+  closedAt            DateTime?
+  createdAt           DateTime  @default(now())
+  updatedAt           DateTime  @updatedAt
+
+  githubAccount   GitHubAccount    @relation(fields: [githubAccountId], references: [id], onDelete: Cascade)
+  repository      GitHubRepository @relation(fields: [repositoryId], references: [id], onDelete: Cascade)
+  executionJobs   ExecutionJob[]
+  issueBranch     IssueBranch?
+  closureRecord   IssueClosureRecord?
+
+  @@unique([repositoryId, issueNumber])
+  @@index([githubAccountId])
+  @@index([repositoryId])
+  @@index([aiStatus])
+}
+
+model ExecutionBatch {
+  id                 String   @id @default(cuid())
+  userId             String
+  name               String?
+  status             String   @default("pending")
+  concurrencyLimit   Int      @default(3)
+  branchPrefix       String   @default("ai")
+  requirePlanApproval Boolean @default(false)
+  retryLimit         Int      @default(2)
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+  completedAt        DateTime?
+
+  user               User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  executionJobs      ExecutionJob[]
+  consolidatedBranches ConsolidatedBranch[]
+
+  @@index([userId])
+  @@index([status])
+}
+
+model ExecutionJob {
+  id                String    @id @default(cuid())
+  batchId           String
+  issueId           String
+  status            String    @default("pending")
+  priority          Int       @default(0)
+  retryCount        Int       @default(0)
+  maxRetries        Int       @default(2)
+  errorMessage      String?   @db.Text
+  analysisResult    Json?
+  implementationPlan Json?
+  planApproved      Boolean   @default(false)
+  currentAgent      String?
+  currentActivity   String?
+  workingDirectory  String?
+  containerId       String?
+  startedAt         DateTime?
+  completedAt       DateTime?
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
+
+  batch             ExecutionBatch @relation(fields: [batchId], references: [id], onDelete: Cascade)
+  issue             AssignedIssue  @relation(fields: [issueId], references: [id], onDelete: Cascade)
+  agentExecutions   AgentExecution[]
+  issueBranch       IssueBranch?
+  executionLogs     ExecutionLog[]
+  testResults       TestResult[]
+  tokenUsages       TokenUsage[]
+
+  @@index([batchId])
+  @@index([issueId])
+  @@index([status])
+}
+
+model AgentExecution {
+  id              String   @id @default(cuid())
+  executionJobId  String
+  agentType       String
+  status          String   @default("pending")
+  inputTokens     Int      @default(0)
+  outputTokens    Int      @default(0)
+  totalCost       Float    @default(0)
+  modelId         String?
+  providerId      String?
+  result          Json?
+  errorMessage    String?  @db.Text
+  startedAt       DateTime?
+  completedAt     DateTime?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  executionJob ExecutionJob @relation(fields: [executionJobId], references: [id], onDelete: Cascade)
+
+  @@index([executionJobId])
+  @@index([agentType])
+}
+
+model IssueBranch {
+  id             String   @id @default(cuid())
+  executionJobId String   @unique
+  issueId        String   @unique
+  branchName     String
+  baseBranch     String
+  status         String   @default("pending")
+  commitSha      String?
+  filesModified  Json     @default("[]")
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  executionJob        ExecutionJob        @relation(fields: [executionJobId], references: [id], onDelete: Cascade)
+  issue               AssignedIssue       @relation(fields: [issueId], references: [id], onDelete: Cascade)
+  consolidatedBranch  ConsolidatedBranch? @relation(fields: [consolidatedBranchId], references: [id])
+  consolidatedBranchId String?
+
+  @@index([executionJobId])
+  @@index([status])
+}
+
+model ConsolidatedBranch {
+  id             String   @id @default(cuid())
+  batchId        String
+  repositoryId   String
+  branchName     String
+  baseBranch     String
+  status         String   @default("pending")
+  conflictFiles  Json     @default("[]")
+  mergedIssues   Json     @default("[]")
+  failedIssues   Json     @default("[]")
+  testsPassed    Boolean?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  batch        ExecutionBatch   @relation(fields: [batchId], references: [id], onDelete: Cascade)
+  repository   GitHubRepository @relation(fields: [repositoryId], references: [id], onDelete: Cascade)
+  issueBranches IssueBranch[]
+  pullRequest  PullRequest?
+
+  @@unique([batchId, repositoryId])
+  @@index([batchId])
+  @@index([status])
+}
+
+model PullRequest {
+  id                   String   @id @default(cuid())
+  consolidatedBranchId String   @unique
+  repositoryId         String
+  githubPrId           String?
+  githubPrNumber       Int?
+  title                String
+  body                 String?  @db.Text
+  sourceBranch         String
+  targetBranch         String
+  htmlUrl              String?
+  state                String   @default("pending")
+  isDraft              Boolean  @default(false)
+  mergedAt             DateTime?
+  closedAt             DateTime?
+  createdAt            DateTime @default(now())
+  updatedAt            DateTime @updatedAt
+
+  consolidatedBranch ConsolidatedBranch @relation(fields: [consolidatedBranchId], references: [id], onDelete: Cascade)
+  repository         GitHubRepository   @relation(fields: [repositoryId], references: [id], onDelete: Cascade)
+  closureRecords     IssueClosureRecord[]
+
+  @@index([repositoryId])
+  @@index([state])
+}
+
+model IssueClosureRecord {
+  id           String    @id @default(cuid())
+  issueId      String    @unique
+  pullRequestId String
+  closedAt     DateTime?
+  closedBy     String?
+  verifiedAt   DateTime?
+  status       String    @default("pending")
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+
+  issue       AssignedIssue @relation(fields: [issueId], references: [id], onDelete: Cascade)
+  pullRequest PullRequest   @relation(fields: [pullRequestId], references: [id], onDelete: Cascade)
+
+  @@index([pullRequestId])
+}
+
+model AIProvider {
+  id          String   @id @default(cuid())
+  name        String   @unique
+  displayName String
+  baseUrl     String
+  isActive    Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  models    AIModel[]
+}
+
+model AIModel {
+  id               String   @id @default(cuid())
+  providerId       String
+  modelId          String
+  displayName      String
+  contextWindow    Int      @default(128000)
+  inputCostPer1k   Float    @default(0)
+  outputCostPer1k  Float    @default(0)
+  supportsTools    Boolean  @default(true)
+  isActive         Boolean  @default(true)
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  provider    AIProvider   @relation(fields: [providerId], references: [id], onDelete: Cascade)
+  tokenUsages TokenUsage[]
+
+  @@unique([providerId, modelId])
+}
+
+model TokenUsage {
+  id             String   @id @default(cuid())
+  userId         String
+  modelId        String
+  executionJobId String?
+  inputTokens    Int      @default(0)
+  outputTokens   Int      @default(0)
+  totalTokens    Int      @default(0)
+  estimatedCost  Float    @default(0)
+  operation      String
+  createdAt      DateTime @default(now())
+
+  user         User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  model        AIModel      @relation(fields: [modelId], references: [id])
+  executionJob ExecutionJob? @relation(fields: [executionJobId], references: [id], onDelete: SetNull)
+
+  @@index([userId])
+  @@index([modelId])
+  @@index([executionJobId])
+  @@index([createdAt])
+}
+
+model ExecutionLog {
+  id             String   @id @default(cuid())
+  executionJobId String
+  level          String   @default("info")
+  message        String   @db.Text
+  metadata       Json?
+  agentType      String?
+  timestamp      DateTime @default(now())
+
+  executionJob ExecutionJob @relation(fields: [executionJobId], references: [id], onDelete: Cascade)
+
+  @@index([executionJobId])
+  @@index([timestamp])
+}
+
+model TestResult {
+  id             String   @id @default(cuid())
+  executionJobId String
+  testRunner     String
+  passed         Int      @default(0)
+  failed         Int      @default(0)
+  skipped        Int      @default(0)
+  duration       Float    @default(0)
+  output         String?  @db.Text
+  exitCode       Int?
+  phase          String
+  createdAt      DateTime @default(now())
+
+  executionJob ExecutionJob @relation(fields: [executionJobId], references: [id], onDelete: Cascade)
+
+  @@index([executionJobId])
+}
+
+model AuditLog {
+  id         String   @id @default(cuid())
+  userId     String?
+  action     String
+  resource   String
+  resourceId String?
+  metadata   Json?
+  ipAddress  String?
+  userAgent  String?
+  createdAt  DateTime @default(now())
+
+  user User? @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@index([userId])
+  @@index([action])
+  @@index([createdAt])
+}
+
+model UserSettings {
+  id                   String   @id @default(cuid())
+  userId               String   @unique
+  concurrencyLimit     Int      @default(3)
+  branchPrefix         String   @default("ai")
+  requirePlanApproval  Boolean  @default(false)
+  retryLimit           Int      @default(2)
+  defaultAiProvider    String   @default("deepseek")
+  defaultAiModel       String   @default("deepseek-chat")
+  emailNotifications   Boolean  @default(true)
+  theme                String   @default("system")
+  encryptedApiKeys     String?  @db.Text
+  createdAt            DateTime @default(now())
+  updatedAt            DateTime @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
